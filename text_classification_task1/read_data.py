@@ -32,3 +32,5 @@ vectorizer.build_vocab(texts)
 X_train = vectorizer.transform(texts)
 
 print(f"\n🧮 训练集特征维度：{X_train.shape}")
+
+#注释
