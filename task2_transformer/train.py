@@ -1,82 +1,96 @@
+import sys
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from preprocess_dataset import load_dataloaders
-from transformer_model import TransformerClassifier
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
-# =====================
-# 参数设置
-# =====================
-train_path = "./data/new_train.tsv"
-test_path = "./data/new_test.tsv"
+# ------------------ 动态添加路径 ------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(BASE_DIR)
+sys.path.append(os.path.join(BASE_DIR, 'utils'))
+sys.path.append(os.path.join(BASE_DIR, 'models'))
 
-batch_size = 64
-max_len = 100
-embed_dim = 128
-num_heads = 4
-num_layers = 2
-hidden_dim = 256
-num_classes = 5  # 标签范围 0~4
-epochs = 5
-lr = 1e-3
+from datautils import load_dataloaders  # utils 下
+from transformer import TransformerModel  # models 下
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# ------------------ 参数配置 ------------------
+TRAIN_FILE = os.path.join(BASE_DIR, 'data', 'new_train.tsv')
+TEST_FILE = os.path.join(BASE_DIR, 'data', 'new_test.tsv')
+BATCH_SIZE = 32
+LR = 1e-3
+EPOCHS = 10
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_SAVE_PATH = os.path.join(BASE_DIR, "transformer_model.pt")
 
-# =====================
-# 数据加载
-# =====================
-train_loader, test_loader, vocab = load_dataloaders(train_path, test_path, batch_size=batch_size, max_len=max_len)
-print(f"Vocab size: {len(vocab)}")
+# ------------------ 数据加载 ------------------
+train_loader, test_loader = load_dataloaders(TRAIN_FILE, TEST_FILE, batch_size=BATCH_SIZE)
 
-# =====================
-# 模型定义
-# =====================
-model = TransformerClassifier(vocab_size=len(vocab),
-                              embed_dim=embed_dim,
-                              num_heads=num_heads,
-                              num_layers=num_layers,
-                              hidden_dim=hidden_dim,
-                              num_classes=num_classes,
-                              max_len=max_len).to(device)
+# ------------------ 模型初始化 ------------------
+vocab_size = train_loader.dataset.vocab_size if hasattr(train_loader.dataset, 'vocab_size') else 10000
+num_classes = train_loader.dataset.num_classes if hasattr(train_loader.dataset, 'num_classes') else 5
 
+model = TransformerModel(vocab_size=vocab_size, embed_dim=128, num_classes=num_classes).to(DEVICE)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=lr)
+optimizer = optim.Adam(model.parameters(), lr=LR)
 
-# =====================
-# 训练函数
-# =====================
-def train():
+# ------------------ 训练循环 ------------------
+train_losses = []
+val_accuracies = []
+
+for epoch in range(EPOCHS):
     model.train()
-    total_loss = 0
-    for x, y in train_loader:
-        x, y = x.to(device), y.to(device)
+    running_loss = 0.0
+    for batch in train_loader:
+        inputs, labels = batch
+        inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+
         optimizer.zero_grad()
-        logits = model(x)
-        loss = criterion(logits, y)
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(train_loader)
+        running_loss += loss.item()
+    
+    avg_loss = running_loss / len(train_loader)
+    train_losses.append(avg_loss)
 
-# =====================
-# 验证函数
-# =====================
-def evaluate():
+    # ------------------ 验证 ------------------
     model.eval()
-    correct, total = 0, 0
+    correct = 0
+    total = 0
     with torch.no_grad():
-        for x, y in test_loader:
-            x, y = x.to(device), y.to(device)
-            logits = model(x)
-            preds = torch.argmax(logits, dim=1)
-            correct += (preds == y).sum().item()
-            total += y.size(0)
-    return correct / total
+        for batch in test_loader:
+            inputs, labels = batch
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    val_acc = correct / total
+    val_accuracies.append(val_acc)
 
-# =====================
-# 主循环
-# =====================
-for epoch in range(1, epochs + 1):
-    loss = train()
-    acc = evaluate()
-    print(f"Epoch {epoch}: Loss={loss:.4f}, Test Acc={acc:.4f}")
+    print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {avg_loss:.4f}, Val Accuracy: {val_acc:.4f}")
+
+# ------------------ 保存模型 ------------------
+torch.save(model.state_dict(), MODEL_SAVE_PATH)
+print(f"Model saved to {MODEL_SAVE_PATH}")
+
+# ------------------ 绘图 ------------------
+plt.figure(figsize=(10,4))
+plt.subplot(1,2,1)
+plt.plot(range(1, EPOCHS+1), train_losses, marker='o')
+plt.title("Training Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+
+plt.subplot(1,2,2)
+plt.plot(range(1, EPOCHS+1), val_accuracies, marker='o', color='orange')
+plt.title("Validation Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+
+plt.tight_layout()
+plt.savefig(os.path.join(BASE_DIR, "training_curves.png"))
+plt.show()

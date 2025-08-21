@@ -1,31 +1,21 @@
 import torch
 import torch.nn as nn
 
-class TransformerClassifier(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_heads, num_layers, hidden_dim, num_classes, max_len=100, dropout=0.1):
-        super().__init__()
-
-        # Embedding + 位置编码
-        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
-        self.pos_embedding = nn.Embedding(max_len, embed_dim)
-
-        # Transformer Encoder 层
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads,
-                                                   dim_feedforward=hidden_dim, dropout=dropout,
-                                                   activation="relu", batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        # 分类头
+class TransformerModel(nn.Module):
+    def __init__(self, vocab_size=10000, embed_dim=128, num_classes=5, num_heads=4, num_layers=2, ff_hidden_dim=256, dropout=0.1):
+        super(TransformerModel, self).__init__()
+        self.embedding = nn.Linear(vocab_size, embed_dim)  # 用 linear 层代替简单 embedding
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=ff_hidden_dim, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.fc = nn.Linear(embed_dim, num_classes)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        bsz, seq_len = x.size()
-        positions = torch.arange(0, seq_len, device=x.device).unsqueeze(0).expand(bsz, seq_len)
+        # x: [batch_size, vocab_size]
+        x = self.embedding(x)  # [batch_size, embed_dim]
+        x = x.unsqueeze(1)  # [batch_size, seq_len=1, embed_dim]
+        x = x.permute(1, 0, 2)  # Transformer expects [seq_len, batch, embed_dim]
+        x = self.transformer_encoder(x)
+        x = x.mean(dim=0)  # 平均池化得到 [batch_size, embed_dim]
+        out = self.fc(x)
+        return out
 
-        x = self.embedding(x) + self.pos_embedding(positions)
-        x = self.transformer(x)  # [batch, seq_len, embed_dim]
-
-        x = x.mean(dim=1)  # 平均池化
-        x = self.dropout(x)
-        return self.fc(x)
